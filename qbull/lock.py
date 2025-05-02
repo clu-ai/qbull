@@ -1,5 +1,5 @@
 import asyncio
-import aioredis
+import redis.asyncio as aioredis
 from pathlib import Path
 
 class RedisLock:

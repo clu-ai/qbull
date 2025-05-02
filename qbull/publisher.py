@@ -1,10 +1,13 @@
 import asyncio
-import aioredis
+import redis.asyncio as aioredis
 import uuid
 import json
 from datetime import datetime
+import redis.exceptions
+
 from qbull.lock import RedisLock
 from qbull.partitioner import get_partition
+
 
 class Publisher:
     def __init__(self, redis_url: str, stream_name: str, partitions: int = 1):
@@ -27,7 +30,9 @@ class Publisher:
         partition = get_partition(data.get("to", ""), self.partitions)
         stream_partition = f"{self.stream_name}:{partition}"
 
-        print(f"📤 Publicando job {job_id} en partición {partition} ({stream_partition})")
+        print(
+            f"📤 Publicando job {job_id} en partición {partition} ({stream_partition})"
+        )
 
         await self.redis.xadd(stream_partition, {"job": json.dumps(payload)})
         return job_id
@@ -39,7 +44,12 @@ class Publisher:
 
 class Consumer:
     def __init__(
-        self, redis_url: str, stream_name: str, group: str, consumer_name: str, partition: int = 0
+        self,
+        redis_url: str,
+        stream_name: str,
+        group: str,
+        consumer_name: str,
+        partition: int = 0,
     ):
         self.redis_url = redis_url
         self.stream_name = stream_name
@@ -56,6 +66,7 @@ class Consumer:
         def decorator(func):
             self.handlers[cmd] = func
             return func
+
         return decorator
 
     async def connect(self):
@@ -65,7 +76,7 @@ class Consumer:
             await self.redis.xgroup_create(
                 self.stream_partition, self.group, id="$", mkstream=True
             )
-        except aioredis.exceptions.ResponseError as e:
+        except redis.exceptions.ResponseError as e:
             if "BUSYGROUP" not in str(e):
                 raise
 
