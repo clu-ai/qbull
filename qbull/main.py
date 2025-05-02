@@ -2,16 +2,17 @@ import asyncio
 import json
 from qbull.publisher import Publisher, Consumer
 
-REDIS_URL = "redis://localhost:6379"
+from qbull.config import PARTITIONS, REDIS_URL
+
 STREAM_NAME = "WHATSAPP"
 GROUP_NAME = "workers"
 CONSUMER_NAME = "worker-1"
-PARTITIONS = 3
 PARTITION = 0  # puedes cambiarlo a 1 o 2 si quieres ejecutar múltiples consumers
 
 consumer = Consumer(
     REDIS_URL, STREAM_NAME, GROUP_NAME, CONSUMER_NAME, partition=PARTITION
 )
+
 
 @consumer.handler("SEND_MESSAGE")
 async def handle_send_message(job):
