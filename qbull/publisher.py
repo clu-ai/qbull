@@ -4,12 +4,13 @@ import uuid
 import json
 from datetime import datetime
 from qbull.lock import RedisLock
-
+from qbull.partitioner import get_partition
 
 class Publisher:
-    def __init__(self, redis_url: str, stream_name: str):
+    def __init__(self, redis_url: str, stream_name: str, partitions: int = 1):
         self.redis_url = redis_url
         self.stream_name = stream_name
+        self.partitions = partitions
         self.redis = None
 
     async def connect(self):
@@ -22,7 +23,13 @@ class Publisher:
             "created_at": datetime.utcnow().isoformat(),
             **data,
         }
-        await self.redis.xadd(self.stream_name, {"job": json.dumps(payload)})
+
+        partition = get_partition(data.get("to", ""), self.partitions)
+        stream_partition = f"{self.stream_name}:{partition}"
+
+        print(f"📤 Publicando job {job_id} en partición {partition} ({stream_partition})")
+
+        await self.redis.xadd(stream_partition, {"job": json.dumps(payload)})
         return job_id
 
     async def close(self):
@@ -32,12 +39,14 @@ class Publisher:
 
 class Consumer:
     def __init__(
-        self, redis_url: str, stream_name: str, group: str, consumer_name: str
+        self, redis_url: str, stream_name: str, group: str, consumer_name: str, partition: int = 0
     ):
         self.redis_url = redis_url
         self.stream_name = stream_name
         self.group = group
         self.consumer_name = consumer_name
+        self.partition = partition
+        self.stream_partition = f"{stream_name}:{partition}"
         self.redis = None
         self.handlers = {}
         self.locker = RedisLock(redis_url)
@@ -47,7 +56,6 @@ class Consumer:
         def decorator(func):
             self.handlers[cmd] = func
             return func
-
         return decorator
 
     async def connect(self):
@@ -55,7 +63,7 @@ class Consumer:
         await self.locker.connect()
         try:
             await self.redis.xgroup_create(
-                self.stream_name, self.group, id="$", mkstream=True
+                self.stream_partition, self.group, id="$", mkstream=True
             )
         except aioredis.exceptions.ResponseError as e:
             if "BUSYGROUP" not in str(e):
@@ -66,7 +74,7 @@ class Consumer:
             response = await self.redis.xreadgroup(
                 groupname=self.group,
                 consumername=self.consumer_name,
-                streams={self.stream_name: ">"},
+                streams={self.stream_partition: ">"},
                 count=1,
                 block=5000,
             )
@@ -92,7 +100,7 @@ class Consumer:
                             else:
                                 print(f"⚠️ No handler para cmd: {cmd}")
                             await self.redis.xack(
-                                self.stream_name, self.group, message_id
+                                self.stream_partition, self.group, message_id
                             )
                         finally:
                             await self.locker.release(lock_key, self.token)

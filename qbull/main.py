@@ -6,9 +6,12 @@ REDIS_URL = "redis://localhost:6379"
 STREAM_NAME = "WHATSAPP"
 GROUP_NAME = "workers"
 CONSUMER_NAME = "worker-1"
+PARTITIONS = 3
+PARTITION = 0  # puedes cambiarlo a 1 o 2 si quieres ejecutar múltiples consumers
 
-consumer = Consumer(REDIS_URL, STREAM_NAME, GROUP_NAME, CONSUMER_NAME)
-
+consumer = Consumer(
+    REDIS_URL, STREAM_NAME, GROUP_NAME, CONSUMER_NAME, partition=PARTITION
+)
 
 @consumer.handler("SEND_MESSAGE")
 async def handle_send_message(job):
@@ -19,7 +22,7 @@ async def handle_send_message(job):
 async def run_all():
     await consumer.connect()
 
-    publisher = Publisher(REDIS_URL, STREAM_NAME)
+    publisher = Publisher(REDIS_URL, STREAM_NAME, partitions=PARTITIONS)
     await publisher.connect()
     job_id = await publisher.publish_job(
         {"cmd": "SEND_MESSAGE", "to": "3205104418", "content": "Hola desde el test"}
