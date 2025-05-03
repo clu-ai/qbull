@@ -19,5 +19,5 @@ Choose one of the following methods to install the library:
 This command installs the latest code from the default branch (usually `main` or `master`) of the repository.
 
 ```bash
-pip install git+https://github.com/clu-ai/qbull.git
+uv pip install git+https://github.com/clu-ai/qbull.git
 ```
