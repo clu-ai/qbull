@@ -1,0 +1,48 @@
+# pyproject.toml
+
+[build-system]
+requires = ["setuptools>=42"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qbull"
+version = "0.1.0" # O la versión que corresponda
+description = "A basic partitioned Redis Streams queue system with locking."
+readme = "README.md"
+requires-python = ">=3.8"
+# --- Licencia actualizada ---
+# Especificar usando el identificador SPDX estándar para GPLv3 o posterior
+# También es MUY RECOMENDABLE incluir el texto completo de la licencia
+# en un archivo llamado LICENSE en la raíz del repositorio.
+license = { text = "GPL-3.0-or-later" } # Identificador SPDX
+# O mejor aún, si creas un archivo LICENSE:
+# license = { file = "LICENSE" }
+# ---------------------------
+authors = [
+    { name = "Rafael Garcia", email = "rafaeljosegarciasuarez@gmail.com" },
+]
+# --- Dependencias OBLIGATORIAS actualizadas ---
+dependencies = [
+    "redis>=4.4.0", # Necesita aioredis
+    "xxhash>=0.8.0", # xxhash ahora es OBLIGATORIO
+]
+# ---------------------------------------------
+
+# --- Ya no hay dependencias opcionales ---
+# [project.optional-dependencies]
+# xxhash = ["xxhash>=0.8.0"] <--- Se movió arriba
+# all = ["qbull[xxhash]"]     <--- Se elimina porque ya no hay opcionales
+# -----------------------------------------
+
+[project.urls]
+Homepage = "https://github.com/clu-ai/qbull"
+Repository = "https://github.com/clu-ai/qbull"
+
+# --- Configuración específica de Setuptools ---
+[tool.setuptools.packages.find]
+where = ["src"]  # Busca paquetes dentro del directorio 'src'
+
+[tool.setuptools.package-data]
+# Incluye todos los archivos .lua dentro del paquete 'qbull.lua'
+# Corregido: debe ser el nombre del subdirectorio/submódulo dentro de qbull
+"qbull.lua" = ["*.lua"]
