@@ -11,7 +11,7 @@ from typing import List # Use List from typing for Task list compatibility < 3.9
 # Assumes the qbull library is installed (e.g., pip install -e . or from GitHub)
 # or that the 'src' directory is in the PYTHONPATH for local testing.
 try:
-    from qbull import Consumer, Publisher, PartitionAllocator
+    from src.qbull import Consumer, Publisher, PartitionAllocator
 except ImportError:
     # Fallback for local testing without installation
     # This assumes you run like: python -m examples.run_workers_example from the repo root

@@ -6,9 +6,9 @@ from datetime import datetime, timezone
 import redis.exceptions
 import logging
 
-from qbull.lock import RedisLock
-from qbull.partitioner import get_partition
-from qbull.config import DEFAULT_JOB_LOCK_TTL_MS  # Import default TTL
+from src.qbull.lock import RedisLock
+from src.qbull.partitioner import get_partition
+from src.qbull.config import DEFAULT_JOB_LOCK_TTL_MS  # Import default TTL
 
 
 class Publisher:

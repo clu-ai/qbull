@@ -11,7 +11,7 @@ from pathlib import Path  # To construct path to .env file
 # or that the 'src' directory is in the PYTHONPATH for local testing.
 try:
     # Standard import if library is installed
-    from qbull import Publisher, Consumer
+    from src.qbull import Publisher, Consumer
 except ImportError:
     # Fallback for local testing without installation
     # This assumes you run like: python -m examples.main_example from the repo root
