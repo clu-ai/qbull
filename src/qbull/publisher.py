@@ -1,3 +1,4 @@
+# publisher.py
 import asyncio
 import redis.asyncio as aioredis
 import uuid
@@ -6,306 +7,137 @@ from datetime import datetime, timezone
 import redis.exceptions
 import logging
 
-from .lock import RedisLock
+# Asumiendo que partitioner.py está en el mismo nivel o en el PYTHONPATH
 from .partitioner import get_partition
-from .config import DEFAULT_JOB_LOCK_TTL_MS  # Import default TTL
+# from .config import PARTITIONS # No se necesita si se pasa en __init__
 
+logger = logging.getLogger(__name__)
 
 class Publisher:
-    def __init__(self, redis_url: str, stream_name: str, partitions: int = 1):
+    """
+    Publishes jobs to specific partitions of a Redis stream based on a partition key.
+    Designed to be instantiated once and used across the application.
+    """
+    def __init__(self, redis_url: str, total_partitions: int):
+        """
+        Initializes the Publisher.
+
+        Args:
+            redis_url: The connection URL for the Redis server.
+            total_partitions: The total number of partitions configured for the system.
+        """
+        if total_partitions <= 0:
+            raise ValueError("total_partitions must be greater than zero")
+
         self.redis_url = redis_url
-        self.stream_name = stream_name
-        self.partitions = max(1, partitions)  # Ensure at least 1 partition
+        self.total_partitions = total_partitions
         self.redis = None
         self._connected = False
+        logger.info(f"Publisher initialized for Redis at {redis_url} with {total_partitions} total partitions.")
 
     async def connect(self):
+        """Establishes connection to Redis."""
         if self._connected:
+            logger.debug("Publisher already connected.")
             return
         try:
             self.redis = await aioredis.from_url(self.redis_url, decode_responses=True)
             await self.redis.ping()
             self._connected = True
-            logging.info(f"Publisher connected for stream '{self.stream_name}'.")
+            logger.info(f"Publisher connected successfully to Redis at {self.redis_url}.")
         except (redis.exceptions.ConnectionError, OSError) as e:
-            logging.error(f"Publisher connection failed: {e}")
+            logger.error(f"Publisher connection failed: {e}")
             self.redis = None
             self._connected = False
             raise
 
     async def publish_job(
-        self, data: dict, partition_key: str | None = None
+        self, stream_name: str, data: dict, partition_key: str | int | None = None
     ) -> str | None:
+        """
+        Publishes a job to the appropriate partition of the specified stream.
+
+        Args:
+            stream_name: The base name of the stream to publish to (e.g., "orders").
+            data: The job data dictionary. Should contain relevant info, including potentially
+                  a 'cmd' field for the consumer handler.
+            partition_key: The key used to determine the partition. If None, it tries
+                           to use 'partition_id' or 'to' from the data, falling back to
+                           a new job_id.
+
+        Returns:
+            The job_id if successfully published, None otherwise.
+        """
         if not self._connected or not self.redis:
-            logging.error("Cannot publish job: Publisher not connected.")
+            logger.error(f"Cannot publish job to '{stream_name}': Publisher not connected.")
             return None
+        if not stream_name:
+             logger.error("Cannot publish job: stream_name is empty.")
+             return None
 
         job_id = str(uuid.uuid4())
+        # Ensure standard fields are present
         payload = {
             "job_id": job_id,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            **data,
+            "published_at": datetime.now(timezone.utc).isoformat(),
+            **data, # Include original data
         }
 
-        # Determine partition key: explicit partition_id, 'to' field, or job_id as fallback
-        key_source = (
-            partition_key or data.get("partition_id") or data.get("to") or job_id
-        )
-        partition = get_partition(str(key_source), self.partitions)
-        stream_partition = f"{self.stream_name}:{partition}"
+        # Determine partition key more explicitly
+        key_source_val = None
+        key_source_name = "none" # For logging clarity
+
+        if partition_key is not None:
+             key_source_val = partition_key
+             key_source_name = "explicit"
+        elif "partition_id" in data:
+             key_source_val = data["partition_id"]
+             key_source_name = "data[partition_id]"
+        elif "to" in data: # Example: user_id, device_id etc.
+             key_source_val = data["to"]
+             key_source_name = "data[to]"
+        else:
+             key_source_val = job_id # Fallback to job_id for distribution
+             key_source_name = "job_id (fallback)"
+
+        # Calculate partition using the chosen key
+        partition = get_partition(key_source_val, self.total_partitions)
+        stream_partition_name = f"{stream_name}:{partition}"
 
         try:
+            # Serialize payload - ensure it's JSON serializable
             job_json = json.dumps(payload)
+
+            # Add job to the specific stream partition
             # XADD stream_key * field value [field value ...]
-            await self.redis.xadd(stream_partition, {"job": job_json})
-            logging.info(
-                f"Published job {job_id} to partition {partition} ({stream_partition}) using key '{key_source}'"
+            message_id = await self.redis.xadd(stream_partition_name, {"job": job_json})
+            logger.info(
+                f"Published job {job_id} (MsgID: {message_id}) to stream '{stream_partition_name}' "
+                f"(Partition {partition} of {self.total_partitions}, Key: '{key_source_name}'='{key_source_val}')"
             )
-            return job_id
+            return job_id # Return the job_id generated by the publisher
+
         except redis.exceptions.RedisError as e:
-            logging.error(f"Failed to publish job {job_id} to {stream_partition}: {e}")
+            logger.error(f"Redis error publishing job {job_id} to {stream_partition_name}: {e}")
             return None
         except TypeError as e:
-            logging.error(f"Failed to serialize job data for job {job_id}: {e}")
+            # Error during json.dumps
+            logger.error(f"Failed to serialize job data for job {job_id} (Stream: {stream_name}): {e}")
             return None
+        except Exception as e:
+             logger.exception(f"Unexpected error publishing job {job_id} to {stream_partition_name}: {e}")
+             return None
 
     async def close(self):
+        """Closes the Redis connection."""
         if self.redis:
             try:
                 await self.redis.close()
-                logging.info(
-                    f"Publisher connection closed for stream '{self.stream_name}'."
-                )
+                logger.info("Publisher connection closed.")
             except redis.exceptions.RedisError as e:
-                logging.error(f"Error closing Publisher connection: {e}")
+                logger.error(f"Error closing Publisher connection: {e}")
             finally:
                 self.redis = None
                 self._connected = False
-
-
-class Consumer:
-    def __init__(
-        self,
-        redis_url: str,
-        stream_name: str,
-        group: str,
-        consumer_name: str,
-        partition: int = 0,
-        job_lock_ttl_ms: int = DEFAULT_JOB_LOCK_TTL_MS,
-        read_block_ms: int = 5000,
-    ):
-        self.redis_url = redis_url
-        self.stream_name = stream_name
-        self.group = group
-        self.consumer_name = (
-            f"{consumer_name}-{partition}"  # Ensure unique consumer name per partition
-        )
-        self.partition = partition
-        self.stream_partition = f"{stream_name}:{partition}"
-        self.job_lock_ttl_ms = job_lock_ttl_ms
-        self.read_block_ms = read_block_ms
-
-        self.redis = None
-        self._connected = False
-        self.handlers = {}
-        self.locker = RedisLock(redis_url)
-        self.token = str(uuid.uuid4())  # Unique token for this consumer instance
-        self._stop_event = asyncio.Event()
-
-    def handler(self, cmd: str):
-        def decorator(func):
-            if cmd in self.handlers:
-                logging.warning(f"Handler for command '{cmd}' is being overwritten.")
-            self.handlers[cmd] = func
-            return func
-
-        return decorator
-
-    async def connect(self):
-        if self._connected:
-            return
-        try:
-            # Connect main redis client and locker client
-            self.redis = await aioredis.from_url(self.redis_url, decode_responses=True)
-            await self.redis.ping()
-            await self.locker.connect()  # Connects its own redis instance
-
-            # Ensure consumer group exists
-            await self.redis.xgroup_create(
-                self.stream_partition,
-                self.group,
-                id="0",
-                mkstream=True,  # Read from start if group new
-            )
-            logging.info(
-                f"Consumer group '{self.group}' ensured for stream '{self.stream_partition}'."
-            )
-            self._connected = True
-            logging.info(
-                f"Consumer '{self.consumer_name}' connected (Token: {self.token[:8]}...)."
-            )
-
-        except redis.exceptions.ResponseError as e:
-            if "BUSYGROUP Consumer Group name already exists" in str(e):
-                logging.info(
-                    f"Consumer group '{self.group}' already exists for stream '{self.stream_partition}'."
-                )
-                self._connected = True  # Group exists, connection is fine
-                logging.info(
-                    f"Consumer '{self.consumer_name}' connected (Token: {self.token[:8]}...)."
-                )
-            else:
-                logging.error(
-                    f"Failed to create/verify consumer group '{self.group}': {e}"
-                )
-                await self.close_internal()  # Cleanup partial connections
-                raise
-        except (redis.exceptions.ConnectionError, OSError) as e:
-            logging.error(f"Consumer connection failed: {e}")
-            await self.close_internal()
-            raise
-
-    async def listen(self):
-        if not self._connected or not self.redis:
-            raise ConnectionError("Consumer is not connected.")
-
-        logging.info(
-            f"Consumer '{self.consumer_name}' starting listening on '{self.stream_partition}'..."
-        )
-        self._stop_event.clear()
-
-        while not self._stop_event.is_set():
-            try:
-                # XREADGROUP GROUP group consumer [COUNT count] [BLOCK milliseconds] STREAMS key [key ...] ID [ID ...]
-                response = await self.redis.xreadgroup(
-                    groupname=self.group,
-                    consumername=self.consumer_name,
-                    streams={self.stream_partition: ">"},  # '>' means new messages only
-                    count=1,
-                    block=self.read_block_ms,
-                )
-
-                if not response:
-                    continue  # Timeout, loop again
-
-                # Response format: [[stream_name, [[message_id, {field: value, ...}], ...]]]
-                for stream, messages in response:
-                    for message_id, fields in messages:
-                        await self.process_message(message_id, fields)
-
-            except redis.exceptions.ConnectionError as e:
-                logging.error(
-                    f"Redis connection error in '{self.consumer_name}': {e}. Attempting to reconnect..."
-                )
-                await asyncio.sleep(
-                    5
-                )  # Wait before potentially reconnecting (aioredis might handle this)
-                # Consider adding explicit reconnect logic if needed
-            except Exception as e:
-                logging.exception(
-                    f"Unexpected error in consumer '{self.consumer_name}' listen loop: {e}"
-                )
-                await asyncio.sleep(5)  # Prevent rapid failing loop
-
-        logging.info(f"Consumer '{self.consumer_name}' listener stopped.")
-
-    async def process_message(self, message_id: str, fields: dict):
-        job_data = None
-        job_id = None
-        lock_key = None
-        acquired = False
-
-        try:
-            job_raw = fields.get("job")
-            if not job_raw:
-                logging.warning(
-                    f"[{self.consumer_name}] Message {message_id} has no 'job' field. Acknowledging."
-                )
-                await self.redis.xack(self.stream_partition, self.group, message_id)
-                return
-
-            job_data = json.loads(job_raw)
-            job_id = job_data.get("job_id")
-            if not job_id:
-                logging.warning(
-                    f"[{self.consumer_name}] Job data in message {message_id} missing 'job_id'. Acknowledging."
-                )
-                await self.redis.xack(self.stream_partition, self.group, message_id)
-                return
-
-            lock_key = f"qbull:job_lock:{job_id}"
-            acquired = await self.locker.acquire_or_extend(
-                lock_key, self.token, self.job_lock_ttl_ms
-            )
-
-            if not acquired:
-                logging.debug(
-                    f"[{self.consumer_name}] Lock busy for job {job_id} ({message_id}), skipping."
-                )
-                # Do not ACK, let another consumer or PEL handle it after timeout
-                return
-
-            logging.info(
-                f"[{self.consumer_name}] Processing job {job_id} ({message_id})..."
-            )
-            cmd = job_data.get("cmd")
-            handler = self.handlers.get(cmd)
-
-            if handler:
-                # Consider adding job lock refresh task here if handlers can be very long
-                await handler(job_data)
-                logging.info(
-                    f"[{self.consumer_name}] Job {job_id} ({message_id}) processed successfully."
-                )
-                # Acknowledge message AFTER successful processing
-                await self.redis.xack(self.stream_partition, self.group, message_id)
-                logging.debug(
-                    f"[{self.consumer_name}] Message {message_id} acknowledged."
-                )
-            else:
-                logging.warning(
-                    f"[{self.consumer_name}] No handler found for command '{cmd}' in job {job_id} ({message_id}). Acknowledging."
-                )
-                await self.redis.xack(self.stream_partition, self.group, message_id)
-
-        except json.JSONDecodeError as e:
-            logging.error(
-                f"[{self.consumer_name}] Failed to decode JSON for message {message_id}: {e}. Acknowledging."
-            )
-            await self.redis.xack(
-                self.stream_partition, self.group, message_id
-            )  # ACK invalid message
-        except Exception as e:
-            # Handler raised an exception
-            logging.exception(
-                f"[{self.consumer_name}] Error processing job {job_id} ({message_id}): {e}"
-            )
-            # Do NOT ACK. Let it be redelivered or handled by PEL recovery.
-        finally:
-            if acquired and lock_key:
-                released = await self.locker.release(lock_key, self.token)
-                if not released:
-                    logging.warning(
-                        f"[{self.consumer_name}] Failed to release lock for job {job_id} (maybe expired or released by other)."
-                    )
-
-    async def close_internal(self):
-        # Helper for closing resources without external signaling
-        if self.redis:
-            try:
-                await self.redis.close()
-            except redis.exceptions.RedisError as e:
-                logging.error(f"Error closing consumer Redis connection: {e}")
-            finally:
-                self.redis = None
-        await self.locker.close()  # Close locker's connection
-        self._connected = False
-
-    async def stop(self):
-        logging.info(f"Stopping consumer '{self.consumer_name}'...")
-        self._stop_event.set()
-
-    async def close(self):
-        await self.stop()
-        await self.close_internal()
-        logging.info(f"Consumer '{self.consumer_name}' closed.")
+        else:
+             logger.info("Publisher connection already closed or not established.")

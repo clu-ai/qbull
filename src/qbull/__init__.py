@@ -4,7 +4,8 @@ import logging # Import standard logging library
 
 # --- Import relative modules to expose their classes/functions ---
 # Use '.' for relative imports within the same package
-from .publisher import Publisher, Consumer
+from .publisher import Publisher
+from .consumer import Consumer
 from .partition_allocator import PartitionAllocator
 from .partitioner import get_partition, hash_fn # Expose helper functions too
 from .lock import RedisLock
