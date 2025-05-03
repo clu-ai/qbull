@@ -25,7 +25,7 @@ authors = [
 dependencies = [
     "redis>=4.4.0", # Necesita aioredis
     "xxhash>=0.8.0", # xxhash ahora es OBLIGATORIO
-    "dotenv>=1.0.1"
+    "python-dotenv>=1.0.1"
 ]
 # ---------------------------------------------
 
