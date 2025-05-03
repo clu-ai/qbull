@@ -1,13 +1,12 @@
 import asyncio
 import json
 from qbull.publisher import Publisher, Consumer
-
 from qbull.config import PARTITIONS, REDIS_URL
 
 STREAM_NAME = "WHATSAPP"
 GROUP_NAME = "workers"
 CONSUMER_NAME = "worker-1"
-PARTITION = 0  # puedes cambiarlo a 1 o 2 si quieres ejecutar múltiples consumers
+PARTITION = 0
 
 consumer = Consumer(
     REDIS_URL, STREAM_NAME, GROUP_NAME, CONSUMER_NAME, partition=PARTITION
@@ -20,9 +19,7 @@ async def handle_send_message(job):
     print(json.dumps(job, indent=2))
 
 
-async def run_all():
-    await consumer.connect()
-
+async def publish_test_message():
     publisher = Publisher(REDIS_URL, STREAM_NAME, partitions=PARTITIONS)
     await publisher.connect()
     job_id = await publisher.publish_job(
@@ -31,6 +28,10 @@ async def run_all():
     print(f"✅ Job publicado con ID: {job_id}")
     await publisher.close()
 
+
+async def run_all():
+    await consumer.connect()
+    asyncio.create_task(publish_test_message())
     await consumer.listen()
 
 

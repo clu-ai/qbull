@@ -27,7 +27,9 @@ class Publisher:
             **data,
         }
 
-        partition = get_partition(data.get("to", ""), self.partitions)
+        # Usar partition_id si está presente, si no, usar 'to' como clave hash
+        key = str(data.get("partition_id")) if "partition_id" in data else data.get("to", "")
+        partition = get_partition(key, self.partitions)
         stream_partition = f"{self.stream_name}:{partition}"
 
         print(
@@ -36,7 +38,7 @@ class Publisher:
 
         await self.redis.xadd(stream_partition, {"job": json.dumps(payload)})
         return job_id
-
+    
     async def close(self):
         if self.redis:
             await self.redis.close()
@@ -79,6 +81,10 @@ class Consumer:
         except redis.exceptions.ResponseError as e:
             if "BUSYGROUP" not in str(e):
                 raise
+            
+    async def close(self):
+        if self.redis:
+            await self.redis.close()
 
     async def listen(self):
         while True:

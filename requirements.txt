@@ -1,2 +1,2 @@
-aioredis
+redis[asyncio]>=4.6
 xxhash
